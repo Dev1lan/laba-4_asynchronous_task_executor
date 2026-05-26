@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from typing import Callable
-from src.task import Task
+from src.domain.task import Task
 
 
 class TaskQueueIterator:

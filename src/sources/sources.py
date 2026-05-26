@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
-from src.task import Task
+from src.domain.task import Task
 
 
 class GeneratorSource:

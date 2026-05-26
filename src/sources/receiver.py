@@ -1,5 +1,5 @@
-from src.protocols import TaskSource
-from src.task import Task
+from src.sources.source_protocols import TaskSource
+from src.domain.task import Task
 
 
 def receive_tasks(source: TaskSource) -> list[Task]:

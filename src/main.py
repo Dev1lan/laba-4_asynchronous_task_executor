@@ -1,84 +1,48 @@
-import json
-from pathlib import Path
-from tempfile import NamedTemporaryFile
+﻿from __future__ import annotations
+import asyncio
 
-from src.receiver import receive_tasks
-from src.sources import APISource, FileSource, GeneratorSource
-from src.task import Task
+from src.async_processing.executor import AsyncTaskExecutor
+from src.async_processing.handlers import FailableHandler, MarkDoneHandler, CompositeHandler
+from src.async_processing.async_queue import AsyncTaskQueue
+from src.sources import GeneratorSource
+from src.sources.receiver import receive_tasks
 
-
-def print_tasks(title: str, tasks: list[Task]) -> None:
+def print_tasks(title: str, tasks: list) -> None:
     print(f"\n{title}")
     print("-" * len(title))
-
     for task in tasks:
         print(task)
-        print(f"  id: {task.id}")
-        print(f"  description: {task.description}")
-        print(f"  priority: {task.priority}")
-        print(f"  status: {task.status}")
-        print(f"  created_at: {task.created_at}")
-        print(f"  is_ready: {task.is_ready}")
-        print(f"  is_completed: {task.is_completed}")
-        print()
 
+async def demo_async_processing() -> None:
+    tasks = receive_tasks(GeneratorSource(6))
+    tasks[2].description = "fail this task"
 
-def demo_generator_source() -> None:
-    source = GeneratorSource(count=3)
-    tasks = receive_tasks(source)
-    print_tasks("GeneratorSource", tasks)
+    print_tasks("Before async processing", tasks)
 
+    queue = AsyncTaskQueue(tasks)
 
-def demo_api_source() -> None:
-    source = APISource()
-    tasks = receive_tasks(source)
-    print_tasks("APISource", tasks)
+    handler = CompositeHandler([
+        FailableHandler(fail_on_substring="fail"),
+        MarkDoneHandler(delay_seconds=0.5)
+    ])
 
+    async with AsyncTaskExecutor(
+        queue=queue,
+        handler=handler,
+        workers_count=3,
+    ) as executor:
+        await executor.run()
 
-def demo_file_source() -> None:
-    demo_data = [
-        {"id": 201, "payload": {"source": "file", "message": "alpha task"}},
-        {"id": 202, "payload": {"source": "file", "message": "beta task"}},
-    ]
+    print_tasks("After async processing", tasks)
 
-    with NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as tmp:
-        json.dump(demo_data, tmp, ensure_ascii=False, indent=2)
-        tmp_path = Path(tmp.name)
+    completed = sum(1 for task in tasks if task.is_completed)
+    failed = sum(1 for task in tasks if task.status == "failed")
 
-    try:
-        source = FileSource(tmp_path)
-        tasks = receive_tasks(source)
-        print_tasks("FileSource", tasks)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-
-from src.receiver import receive_tasks
-from src.sources import GeneratorSource
-from src.task_queue import TaskQueue
-
+    print(f"\nCompleted: {completed}")
+    print(f"Failed: {failed}")
 
 def main() -> None:
-    source = GeneratorSource(5)
-    tasks = receive_tasks(source)
-
-    queue = TaskQueue(tasks)
-
-    print("Все задачи:")
-    for task in queue:
-        print(task)
-
-    print("\nЗадачи со статусом new:")
-    for task in queue.filter_by_status("new"):
-        print(task)
-
-    print("\nЗадачи с приоритетом >= 3:")
-    for task in queue.filter_by_priority(min_priority=3):
-        print(task)
-
-    completed_count = sum(1 for task in queue if task.is_completed)
-    print(f"\nКоличество завершённых задач: {completed_count}")
-
+    asyncio.run(demo_async_processing())
 
 if __name__ == "__main__":
     main()

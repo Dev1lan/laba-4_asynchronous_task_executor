@@ -5,18 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from src.exceptions import (
+from src.domain.exceptions import (
     InvalidCreatedAtError,
     InvalidDescriptionError,
     InvalidPriorityError,
     InvalidStatusError,
     InvalidTaskIdError,
 )
-from src.protocols import TaskSource
-from src.receiver import receive_tasks
+from src.sources.source_protocols import TaskSource
+from src.sources.receiver import receive_tasks
 from src.sources import APISource, FileSource, GeneratorSource
-from src.task import Task
-from src.task_queue import TaskQueue
+from src.domain.task import Task
+from src.queue.task_queue import TaskQueue
 
 
 def make_task(
@@ -525,3 +525,91 @@ def test_filter_generator_is_one_time_iterator():
     assert second_pass == []
 
 # python -m pytest - запуск тестов
+
+def test_async_executor_marks_done_for_all_tasks():
+    import asyncio
+    from src.async_processing.async_queue import AsyncTaskQueue
+    from src.async_processing.executor import AsyncTaskExecutor
+    from src.async_processing.handlers import MarkDoneHandler
+
+    tasks = [
+        make_task(1, "A", status="new"),
+        make_task(2, "B", status="new"),
+        make_task(3, "C", status="new"),
+    ]
+
+    async def run() -> None:
+        queue = AsyncTaskQueue(tasks)
+        async with AsyncTaskExecutor(queue=queue, handler=MarkDoneHandler(), workers_count=2) as executor:
+            await executor.run()
+
+    asyncio.run(run())
+
+    assert all(task.status == "done" for task in tasks)
+
+
+def test_async_executor_marks_failed_by_condition():
+    import asyncio
+    from src.async_processing.async_queue import AsyncTaskQueue
+    from src.async_processing.executor import AsyncTaskExecutor
+    from src.async_processing.handlers import FailableHandler
+
+    tasks = [
+        make_task(1, "normal task", status="new"),
+        make_task(2, "please FAIL this", status="new"),
+    ]
+
+    async def run() -> None:
+        queue = AsyncTaskQueue(tasks)
+        async with AsyncTaskExecutor(queue=queue, handler=FailableHandler(), workers_count=1) as executor:
+            await executor.run()
+
+    asyncio.run(run())
+
+    assert tasks[0].status == "done"
+    assert tasks[1].status == "failed"
+
+
+def test_async_executor_invalid_workers_count():
+    from src.async_processing.async_queue import AsyncTaskQueue
+    from src.async_processing.executor import AsyncTaskExecutor
+    from src.async_processing.handlers import MarkDoneHandler
+
+    queue = AsyncTaskQueue()
+    with pytest.raises(ValueError, match="workers_count must be positive"):
+        AsyncTaskExecutor(queue=queue, handler=MarkDoneHandler(), workers_count=0)
+
+
+def test_composite_handler_requires_at_least_one_handler():
+    from src.async_processing.handlers import CompositeHandler
+
+    with pytest.raises(ValueError, match="At least one handler is required"):
+        CompositeHandler([])
+
+
+def test_composite_handler_execution_chain():
+    """Проверяет, что CompositeHandler вызывает обработчики по цепочке."""
+    import asyncio
+    from src.async_processing.async_queue import AsyncTaskQueue
+    from src.async_processing.executor import AsyncTaskExecutor
+    from src.async_processing.handlers import CompositeHandler, MarkDoneHandler, FailableHandler
+
+    tasks = [
+        make_task(1, "task to fail", status="new"),
+        make_task(2, "normal task", status="new"),
+    ]
+
+    async def run() -> None:
+        queue = AsyncTaskQueue(tasks)
+        handler = CompositeHandler([
+            FailableHandler(fail_on_substring="fail"),
+            MarkDoneHandler()
+        ])
+        
+        async with AsyncTaskExecutor(queue=queue, handler=handler, workers_count=2) as executor:
+            await executor.run()
+
+    asyncio.run(run())
+
+    assert tasks[0].status == "failed"
+    assert tasks[1].status == "done"
